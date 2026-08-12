@@ -11,9 +11,10 @@ spec:
         elements:
           - cluster: 172.31.40.76:33893
             url: https://172.31.40.76:33893
+            appName: demo-backend
   template:
     metadata:
-      name: '{{cluster}}-demo-backend'
+      name: '{{appName}}'
       namespace: argocd
       labels:
         app.kubernetes.io/part-of: demo-kube
