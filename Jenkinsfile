@@ -6,6 +6,9 @@ pipeline {
         string(name: 'GIT_REPO_URL', defaultValue: 'github.com/Nayannyk/demo-kube.git', description: 'GitHub repo path')
         string(name: 'GIT_BRANCH', defaultValue: 'main', description: 'Branch to push the manifest bump to')
         string(name: 'GIT_IDENTITY', defaultValue: 'jenkins-cd <jenkins@demo.local>', description: 'git author: "Name <email>"')
+        string(name: 'CLUSTER_NAME', defaultValue: '172.31.40.76:33893', description: 'Cluster name as registered in ArgoCD')
+        string(name: 'CLUSTER_SERVER', defaultValue: 'https://172.31.40.76:33893', description: 'Kubernetes API server URL of the ArgoCD cluster')
+        string(name: 'KUBECONFIG_PATH', defaultValue: '/home/ubuntu/.kube/config', description: 'Path to the kubeconfig file on the Jenkins agent')
     }
 
     options {
@@ -108,6 +111,18 @@ pipeline {
                         git push "https://x-access-token:${GH_PAT}@${GIT_REPO_URL}" HEAD:${GIT_BRANCH}
                     '''
                 }
+            }
+        }
+
+        stage('Deploy to Cluster') {
+            steps {
+                script {
+                    env.KUBECONFIG = KUBECONFIG_PATH
+                }
+                sh '''
+                    kubectl apply -f argocd/appset.yaml
+                    kubectl -n argocd get applicationset demo-backend
+                '''
             }
         }
     }

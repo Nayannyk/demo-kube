@@ -1,0 +1,41 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: demo-backend
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: demo-kube
+spec:
+  generators:
+    - list:
+        elements:
+          - cluster: 172.31.40.76:33893
+            url: https://172.31.40.76:33893
+  template:
+    metadata:
+      name: '{{cluster}}-demo-backend'
+      namespace: argocd
+      labels:
+        app.kubernetes.io/part-of: demo-kube
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/Nayannyk/demo-kube.git
+        targetRevision: main
+        path: k8s
+      destination:
+        server: '{{url}}'
+        namespace: demo
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - PruneLast=true
+        retry:
+          limit: 3
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 3m
