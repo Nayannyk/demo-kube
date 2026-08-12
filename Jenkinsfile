@@ -11,6 +11,16 @@ pipeline {
         string(name: 'KUBECONFIG_PATH', defaultValue: '/home/ubuntu/.kube/config', description: 'Path to the kubeconfig file on the Jenkins agent')
     }
 
+    environment {
+        IMAGE_NAME = "${params.IMAGE_NAME ?: 'nayannyk/demo-backend'}"
+        GIT_REPO_URL = "${params.GIT_REPO_URL ?: 'github.com/Nayannyk/demo-kube.git'}"
+        GIT_BRANCH = "${params.GIT_BRANCH ?: 'main'}"
+        GIT_IDENTITY = "${params.GIT_IDENTITY ?: 'jenkins-cd <jenkins@demo.local>'}"
+        CLUSTER_NAME = "${params.CLUSTER_NAME ?: '172.31.40.76:33893'}"
+        CLUSTER_SERVER = "${params.CLUSTER_SERVER ?: 'https://172.31.40.76:33893'}"
+        KUBECONFIG_PATH = "${params.KUBECONFIG_PATH ?: '/home/ubuntu/.kube/config'}"
+    }
+
     options {
         timestamps()
         disableConcurrentBuilds()
@@ -62,7 +72,7 @@ pipeline {
             steps {
                 script {
                     env.IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    echo "Building ${IMAGE_NAME}:${env.IMAGE_TAG}"
+                    echo "Building ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
                 }
                 sh 'docker build -t "$IMAGE_NAME:$IMAGE_TAG" app/'
             }
@@ -117,7 +127,7 @@ pipeline {
         stage('Deploy to Cluster') {
             steps {
                 script {
-                    env.KUBECONFIG = KUBECONFIG_PATH
+                    env.KUBECONFIG = env.KUBECONFIG_PATH
                 }
                 sh '''
                     kubectl apply -f argocd/appset.yaml
@@ -131,7 +141,7 @@ pipeline {
         success {
             script {
                 if (env.SKIP_BUILD == 'false') {
-                    echo "Deployment handled by ArgoCD (GitOps) - syncing ${IMAGE_NAME}:${env.IMAGE_TAG}"
+                    echo "Deployment handled by ArgoCD (GitOps) - syncing ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
                 }
             }
         }
