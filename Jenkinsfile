@@ -1,10 +1,11 @@
 pipeline {
     agent any
 
-    environment {
-        REGISTRY   = 'localhost:5000'
-        IMAGE      = 'localhost:5000/demo-backend'
-        GIT_BRANCH = 'main'
+    parameters {
+        string(name: 'IMAGE_NAME', defaultValue: 'nayannyk/demo-backend', description: 'Docker Hub image name (namespace/repo)')
+        string(name: 'GIT_REPO_URL', defaultValue: 'github.com/Nayannyk/demo-kube.git', description: 'GitHub repo path')
+        string(name: 'GIT_BRANCH', defaultValue: 'main', description: 'Branch to push the manifest bump to')
+        string(name: 'GIT_IDENTITY', defaultValue: 'jenkins-cd <jenkins@demo.local>', description: 'git author: "Name <email>"')
     }
 
     options {
@@ -58,16 +59,23 @@ pipeline {
             steps {
                 script {
                     env.IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    echo "Building ${IMAGE}:${env.IMAGE_TAG}"
+                    echo "Building ${IMAGE_NAME}:${env.IMAGE_TAG}"
                 }
-                sh 'docker build -t "$IMAGE:$IMAGE_TAG" app/'
+                sh 'docker build -t "$IMAGE_NAME:$IMAGE_TAG" app/'
             }
         }
 
         stage('Push Image') {
             when { expression { env.SKIP_BUILD == 'false' } }
             steps {
-                sh 'docker push "$IMAGE:$IMAGE_TAG"'
+                withCredentials([
+                    usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')
+                ]) {
+                    sh '''
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        docker push "$IMAGE_NAME:$IMAGE_TAG"
+                    '''
+                }
             }
         }
 
@@ -76,11 +84,13 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        sed -i "s|image: $IMAGE:.*|image: $IMAGE:$IMAGE_TAG|" k8s/app.yaml
-                        git config user.name  "jenkins-cd"
-                        git config user.email "jenkins@demo.local"
+                        sed -i "s|image: .*|image: $IMAGE_NAME:$IMAGE_TAG|" k8s/app.yaml
+                        GIT_NAME=$(echo "$GIT_IDENTITY" | sed -E 's/ <.*>//')
+                        GIT_EMAIL=$(echo "$GIT_IDENTITY" | sed -E 's/.*<([^>]+)>.*/\1/')
+                        git config user.name  "$GIT_NAME"
+                        git config user.email "$GIT_EMAIL"
                         git add k8s/app.yaml
-                        git commit -m "chore(ci): bump demo-backend image tag to $IMAGE_TAG"
+                        git commit -m "chore(ci): bump backend image tag to $IMAGE_TAG"
                     '''
                     // Store commit SHA to push after ArgoCD sync check
                     env.MANIFEST_COMMIT = sh(script: "git rev-parse HEAD", returnStdout: true).trim()
@@ -95,7 +105,7 @@ pipeline {
                     string(credentialsId: 'github-pat', variable: 'GH_PAT')
                 ]) {
                     sh '''
-                        git push "https://x-access-token:${GH_PAT}@github.com/Nayannyk/demo-kube.git" HEAD:main
+                        git push "https://x-access-token:${GH_PAT}@${GIT_REPO_URL}" HEAD:${GIT_BRANCH}
                     '''
                 }
             }
@@ -106,7 +116,7 @@ pipeline {
         success {
             script {
                 if (env.SKIP_BUILD == 'false') {
-                    echo "Deployment handled by ArgoCD (GitOps) - syncing ${env.IMAGE}:${env.IMAGE_TAG}"
+                    echo "Deployment handled by ArgoCD (GitOps) - syncing ${IMAGE_NAME}:${env.IMAGE_TAG}"
                 }
             }
         }
