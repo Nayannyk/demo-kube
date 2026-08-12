@@ -8,7 +8,7 @@ pipeline {
         string(name: 'GIT_IDENTITY', defaultValue: 'jenkins-cd <jenkins@demo.local>', description: 'git author: "Name <email>"')
         string(name: 'CLUSTER_NAME', defaultValue: '172.31.40.76:33893', description: 'Cluster name as registered in ArgoCD')
         string(name: 'CLUSTER_SERVER', defaultValue: 'https://172.31.40.76:33893', description: 'Kubernetes API server URL of the ArgoCD cluster')
-        string(name: 'KUBECONFIG_PATH', defaultValue: '/home/ubuntu/.kube/config', description: 'Path to the kubeconfig file on the Jenkins agent')
+        string(name: 'KUBECONFIG_PATH', defaultValue: '/var/lib/jenkins/.kube/config', description: 'Path to the kubeconfig file on the Jenkins agent')
     }
 
     environment {
@@ -18,7 +18,7 @@ pipeline {
         GIT_IDENTITY = "${params.GIT_IDENTITY ?: 'jenkins-cd <jenkins@demo.local>'}"
         CLUSTER_NAME = "${params.CLUSTER_NAME ?: '172.31.40.76:33893'}"
         CLUSTER_SERVER = "${params.CLUSTER_SERVER ?: 'https://172.31.40.76:33893'}"
-        KUBECONFIG_PATH = "${params.KUBECONFIG_PATH ?: '/home/ubuntu/.kube/config'}"
+        KUBECONFIG_PATH = "${params.KUBECONFIG_PATH ?: '/var/lib/jenkins/.kube/config'}"
     }
 
     options {
