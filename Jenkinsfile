@@ -28,6 +28,13 @@ pipeline {
         buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
+    // Trigger on GitHub push to main (webhook -> /github-webhook/).
+    // Pushes to the `manifests` branch are filtered out (job SCM watches */main),
+    // so manifest-only changes never start a build.
+    triggers {
+        githubPush()
+    }
+
     stages {
         stage('Checkout') {
             steps {
