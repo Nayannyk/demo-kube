@@ -313,7 +313,6 @@ Secrets are **never committed to git**. Locations:
 | **Docker Hub credentials** (`dockerhub-creds`) | Jenkins credential store | `docker login` + pushing images |
 | **Redis password** (`backend-secret`) | Kubernetes Secret in `demo` namespace | Backend ↔ Redis auth |
 | **Grafana admin password** | Kubernetes Secret `kube-prometheus-stack-grafana` (`monitoring` ns); pinned `admin`/`admin` via `monitoring/kube-prometheus-stack-values.yaml` | Grafana login |
-| **SSH key** | Local `C:/Users/NAYAN/Downloads/Kind_key.pem` | EC2 access |
 
 - **Jenkins webhook** (id `665159979`): `http://<server-public-ip>:8080/github-webhook/`
   (JSON, push events) — points GitHub → Jenkins.
