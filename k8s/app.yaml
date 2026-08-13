@@ -18,7 +18,7 @@ spec:
       containers:
         - name: backend
           # image tag is bumped by the CI/CD pipeline (Jenkins) on every build
-          image: nayannyk/demo-backend:latest
+          image: nayannyk/demo-backend:e4c9cfb
           ports:
             - containerPort: 5000
           env:
