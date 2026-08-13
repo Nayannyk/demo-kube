@@ -140,6 +140,47 @@ pipeline {
                 '''
             }
         }
+
+        stage('Expose Chat App (port-forward)') {
+            steps {
+                script {
+                    env.KUBECONFIG = env.KUBECONFIG_PATH
+                }
+                sh '''
+                    PF_PID_FILE=/tmp/demo-chat-port-forwards.pid
+
+                    # stop stale port-forwards from a previous run
+                    if [ -f "$PF_PID_FILE" ]; then
+                        while read -r pid; do kill "$pid" 2>/dev/null || true; done < "$PF_PID_FILE"
+                        rm -f "$PF_PID_FILE"
+                    fi
+
+                    # wait for ArgoCD to create the Services
+                    for i in $(seq 1 60); do
+                        if kubectl -n demo get svc frontend backend >/dev/null 2>&1; then break; fi
+                        sleep 5
+                    done
+
+                    # wait until at least one pod of each app is Ready
+                    kubectl -n demo wait --for=condition=available deploy/frontend --timeout=180s || true
+                    kubectl -n demo wait --for=condition=available deploy/backend  --timeout=180s || true
+
+                    # background port-forwards (bound to all interfaces; SG opens 8081/5000)
+                    nohup kubectl -n demo port-forward --address 0.0.0.0 svc/frontend 8081:80 > /tmp/pf-frontend.log 2>&1 &
+                    echo $! > "$PF_PID_FILE"
+                    nohup kubectl -n demo port-forward --address 0.0.0.0 svc/backend  5000:80 > /tmp/pf-backend.log 2>&1 &
+                    echo $! >> "$PF_PID_FILE"
+
+                    sleep 5
+                    echo "----------------------------------------------------------"
+                    echo " Chat UI     : http://$(curl -s ifconfig.me):8081"
+                    echo " Backend API : http://$(curl -s ifconfig.me):5000"
+                    echo "----------------------------------------------------------"
+                    tail -n 2 /tmp/pf-frontend.log
+                    tail -n 2 /tmp/pf-backend.log
+                '''
+            }
+        }
     }
 
     post {

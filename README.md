@@ -118,6 +118,7 @@ git push (app/frontend change)
       -> Jenkins builds & pushes nayannyk/demo-backend:<sha> + nayannyk/demo-frontend:<sha>
       -> Jenkins bumps image tags in k8s/app.yaml + k8s/frontend.yaml and commits
       -> ArgoCD detects change, auto-syncs Deployments
+      -> Jenkins port-forwards frontend (8081) + backend (5000) on the host
 ```
 
 ## Notes
