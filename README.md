@@ -66,12 +66,50 @@ kubectl -n demo rollout status deployment/backend
 kubectl -n demo rollout status deployment/frontend
 kubectl -n demo get pods,svc
 
-# Access the chat UI (NodePort):
+# Access the chat UI directly via NodePort:
 #   http://<node-ip>:30080
-# or port-forward the ClusterIP/NodePort:
-kubectl -n demo port-forward svc/frontend 8081:80
-# then open http://localhost:8081
 ```
+
+## Port forwarding
+
+### Local kubectl (ClusterIP services)
+
+```bash
+# Chat UI  -> http://localhost:8081
+kubectl -n demo port-forward svc/frontend 8081:80
+
+# Backend API -> http://localhost:5000
+kubectl -n demo port-forward svc/backend 5000:80
+
+# Redis (optional, e.g. redis-cli)
+kubectl -n demo port-forward svc/redis 6379:6379
+```
+
+### SSH tunnel to the EC2 pipeline host (kind cluster)
+
+If the cluster is on the EC2 host and you want a private tunnel (no NodePort):
+
+```bash
+# Chat UI  -> http://localhost:8081
+ssh -i C:/Users/NAYAN/Downloads/Kind_key.pem -L 8081:localhost:30080 ubuntu@<public-ip>
+
+# Backend API -> http://localhost:5000
+ssh -i C:/Users/NAYAN/Downloads/Kind_key.pem -L 5000:localhost:30080 ubuntu@<public-ip>
+
+# Multiple tunnels at once
+ssh -i C:/Users/NAYAN/Downloads/Kind_key.pem \
+  -L 8081:localhost:30080 -L 5000:localhost:30080 ubuntu@<public-ip>
+```
+
+### Direct from the EC2 host
+
+```bash
+kubectl -n demo port-forward svc/frontend 8081:80   # on the host
+# then open http://<public-ip>:8081 (SG opens port 8081)
+```
+
+> Note: 8080 is reserved for Jenkins, so the chat UI uses 8081 (compose) /
+> NodePort 30080 (cluster).
 
 ## Pipeline flow (Jenkins)
 
