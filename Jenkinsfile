@@ -144,8 +144,7 @@ pipeline {
                 }
                 sh '''
                     git fetch origin "${MANIFESTS_BRANCH}"
-                    git show "origin/${MANIFESTS_BRANCH}:argocd/appset.yaml" > /tmp/appset.yaml
-                    kubectl apply -f /tmp/appset.yaml
+                    git show "origin/${MANIFESTS_BRANCH}:argocd/appset.yaml" | kubectl apply -f -
                     kubectl -n argocd get applicationset demo-backend
                 '''
             }
