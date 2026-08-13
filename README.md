@@ -59,7 +59,251 @@ Ubuntu 22.04) that also hosts a **kind** Kubernetes cluster.
 | **Demo chat app** (`demo` namespace) | Redis + backend ×2 + frontend ×2 (Deployments with readiness/liveness probes, resource requests/limits) |
 | **kube-prometheus-stack v88.3.0** (`monitoring` namespace) | Prometheus, Grafana, AlertManager, kube-state-metrics, node-exporter (daemonset), prometheus-operator |
 
-## 4. Where the secrets are stored
+## 4. Step-by-step setup of the entire machine
+
+Below is the exact order used to bring up the EC2 host from scratch: OS → Docker →
+kubectl → kind cluster → Helm → Jenkins (with plugins) → ArgoCD → Prometheus/Grafana →
+then the repo + pipeline. Run every command as the `ubuntu` user unless noted.
+
+### 4.1 Prerequisites
+
+- EC2 instance **Ubuntu 22.04**, recommended `t3.large` (2 vCPU / 8 GB)
+- Security group must open: `22`, `8080` (Jenkins), `3000` (Grafana),
+  `9090` (Prometheus), `30083` (ArgoCD NodePort), `5000` + `8081` (chat app)
+
+### 4.2 Step 1 — Update the OS
+
+```bash
+sudo apt update && sudo apt upgrade -y
+```
+
+### 4.3 Step 2 — Install Docker
+
+```bash
+sudo apt install -y docker.io
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+newgrp docker        # apply the group change without logging out
+docker version
+```
+
+### 4.4 Step 3 — Install git
+
+```bash
+sudo apt install -y git
+git --version
+```
+
+### 4.5 Step 4 — Install kubectl
+
+```bash
+curl -fsSL -o kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+chmod +x kubectl
+sudo install -m 755 kubectl /usr/local/bin/kubectl
+kubectl version --client
+```
+
+### 4.6 Step 5 — Install kind and create the cluster
+
+The cluster binds the Kubernetes API server to the EC2 **private IP** on port
+`33893` so Jenkins and ArgoCD can reach it. The config lives in
+[`kind.yaml`](./kind.yaml) at the repo root — replace `<your private IP>` first.
+
+```yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  apiServerAddress: "<your private IP>"   # run `hostname -I` or check the EC2 dashboard
+  apiServerPort: 33893
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.33.1
+  - role: worker
+    image: kindest/node:v1.33.1
+  - role: worker
+    image: kindest/node:v1.33.1
+```
+
+```bash
+# install kind
+curl -Lo kind "https://github.com/kubernetes-sigs/kind/releases/latest/download/kind-linux-amd64"
+chmod +x kind
+sudo install -m 755 kind /usr/local/bin/kind
+kind version
+
+# create the cluster
+hostname -I                                       # e.g. 172.31.19.178 -> edit kind.yaml
+kind create cluster --name demo-cluster --config kind.yaml
+kind get clusters
+kubectl cluster-info
+kubectl get nodes -o wide
+```
+
+### 4.7 Step 6 — Install Helm
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+helm version
+```
+
+### 4.8 Step 7 — Install Jenkins
+
+```bash
+sudo apt install -y openjdk-17-jre-headless fontconfig
+
+curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | sudo tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" | sudo tee /etc/apt/sources.list.d/jenkins.list > /dev/null
+sudo apt update
+sudo apt install -y jenkins
+
+sudo systemctl enable --now jenkins
+sudo systemctl status jenkins
+sudo cat /var/lib/jenkins/secrets/initialAdminPassword   # first-time unlock code
+```
+
+Jenkins runs as a systemd service on port `8080`. Open
+`http://<server-public-ip>:8080`, enter the initial admin password and install
+the **suggested plugins**.
+
+Give the `jenkins` user access to Docker and kubectl (the pipeline runs
+`docker build`/`push` and `kubectl`):
+
+```bash
+sudo usermod -aG docker jenkins
+sudo mkdir -p /var/lib/jenkins/.kube
+sudo cp ~/.kube/config /var/lib/jenkins/.kube/config
+sudo chown -R jenkins:jenkins /var/lib/jenkins/.kube
+sudo systemctl restart jenkins
+```
+
+### 4.9 Step 8 — Jenkins plugins used by this pipeline
+
+| Plugin | Used for |
+|--------|----------|
+| **Pipeline** | Declarative `pipeline { }` in the Jenkinsfile |
+| **Git** | `checkout scm` |
+| **GitHub** | `githubPush()` trigger + `/github-webhook/` |
+| **Credentials Binding** | `withCredentials(usernamePassword … / string …)` |
+| **Timestamper** | `timestamps()` log output |
+| **Docker Pipeline** (optional) | `docker.build()` convenience steps (this repo calls the `docker` CLI via `sh` instead) |
+
+Install via **Manage Jenkins → Plugins → Available plugins** (or the suggested
+list already includes most of them).
+
+### 4.10 Step 9 — Create the Jenkins job, credentials and webhook
+
+1. **Job**: New Item → Pipeline → name `demo-kube`
+2. **Definition**: *Pipeline script from SCM*
+   - SCM: **Git**
+   - Repository URL: `https://github.com/Nayannyk/demo-kube.git`
+   - Branches to build: `*/main`
+   - Script Path: `Jenkinsfile`
+3. **Credentials** (Manage Jenkins → Credentials → Global → Add credentials):
+   - `github-pat` — Secret text (GitHub PAT used to push tag bumps to `manifests`)
+   - `dockerhub-creds` — Username with password (Docker Hub `docker login`/push)
+4. **Webhook**: GitHub repo → Settings → Webhooks → Add webhook
+   `http://<server-public-ip>:8080/github-webhook/`, content type
+   `application/json`, trigger on **push** events
+
+### 4.11 Step 10 — Install ArgoCD (GitOps CD)
+
+```bash
+# install ArgoCD server-side (stable channel, includes ApplicationSet CRD)
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+# expose the UI as NodePort 30083
+kubectl patch svc argocd-server -n argocd -p '{"spec":{"type":"NodePort","ports":[{"name":"http","port":80,"targetPort":8080,"nodePort":30083},{"name":"https","port":443,"targetPort":8080,"nodePort":30084}]}}'
+# serve plain HTTP (avoid https redirect loop behind the SG)
+kubectl patch cm argocd-cmd-params-cm -n argocd --type merge -p '{"data":{"server.insecure":"true"}}'
+kubectl rollout restart deploy argocd-server -n argocd
+
+# ArgoCD CLI
+curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+sudo install -m 755 argocd /usr/local/bin/argocd
+argocd version --client
+
+# initial admin password
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+Register the kind cluster with ArgoCD so the `ApplicationSet` (which targets
+`https://172.31.40.76:33893`, i.e. the private IP + `apiServerPort` from
+`kind.yaml`) can deploy into it:
+
+```bash
+argocd login 172.31.40.76:33893 --insecure          # admin + the password above
+argocd cluster add kind-demo-cluster --insecure     # kind context name = kind-<cluster-name>
+argocd app list                                     # demo-backend + kube-prometheus-stack appear here
+```
+
+### 4.12 Step 11 — Install Prometheus + Grafana
+
+This repo manages monitoring as **GitOps** — an ArgoCD `Application`
+(`monitoring/application.yaml` on the `manifests` branch) that renders the
+`kube-prometheus-stack` Helm chart `88.3.0` with the repo's values file. Nothing
+needs to be installed by hand; push the manifests and ArgoCD syncs:
+
+```bash
+git add monitoring/ argocd/
+git commit -m "monitoring: add kube-prometheus-stack Application + values"
+git push origin manifests
+
+kubectl get app -n argocd                            # watch kube-prometheus-stack -> Synced/Healthy
+kubectl get pods -n monitoring
+kubectl get svc -n monitoring
+```
+
+Direct (non-GitOps) equivalent, for reference:
+
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+  --namespace monitoring --create-namespace \
+  --version 88.3.0 \
+  --values monitoring/kube-prometheus-stack-values.yaml
+```
+
+Expose the UIs (already reachable on ports `3000`/`9090` if your security group
+routes them to a NodePort, otherwise port-forward):
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
+kubectl -n monitoring port-forward svc/prometheus-operated 9090:9090
+# Grafana login: admin / admin (pinned via monitoring/kube-prometheus-stack-values.yaml)
+```
+
+### 4.13 Step 12 — Create the repo, folder structure and pipeline
+
+```bash
+mkdir -p demo-kube/{app,frontend,k8s,argocd,monitoring}
+cd demo-kube
+git init -b main
+git branch manifests
+git remote add origin https://github.com/Nayannyk/demo-kube.git
+git add .
+git commit -m "chore: initial repo + folder structure"
+git push -u origin main manifests
+```
+
+Folder structure (see also section 9 "Repo layout"):
+
+```
+app/           Flask backend + Dockerfile + tests
+frontend/      nginx chat UI + Dockerfile + tests
+k8s/           Kubernetes manifests — one file per resource
+argocd/        ApplicationSet (targets k8s/ on the manifests branch)
+monitoring/    ArgoCD Application + values for kube-prometheus-stack
+kind.yaml      kind cluster config (replace <your private IP>)
+Jenkinsfile    CI/CD pipeline (webhook-triggered, self-bump + GitOps)
+```
+
+Then add the `Jenkinsfile` (this repo's pipeline), commit and push to `main`.
+The GitHub webhook triggers Jenkins, which builds/pushes images, bumps the tags
+on `manifests`, and ArgoCD rolls the new version out.
+
+## 5. Where the secrets are stored
 
 Secrets are **never committed to git**. Locations:
 
@@ -71,12 +315,12 @@ Secrets are **never committed to git**. Locations:
 | **Grafana admin password** | Kubernetes Secret `kube-prometheus-stack-grafana` (`monitoring` ns); pinned `admin`/`admin` via `monitoring/kube-prometheus-stack-values.yaml` | Grafana login |
 | **SSH key** | Local `C:/Users/NAYAN/Downloads/Kind_key.pem` | EC2 access |
 
-- **Jenkins webhook** (id `665159979`): `http://3.110.147.28:8080/github-webhook/`
+- **Jenkins webhook** (id `665159979`): `http://<server-public-ip>:8080/github-webhook/`
   (JSON, push events) — points GitHub → Jenkins.
 - Kubernetes Secrets are base64-encoded in cluster **etcd**; Jenkins credentials
   are AES-encrypted in `credentials.xml`.
 
-## 5. CI/CD tools and how the pipeline works
+## 6. CI/CD tools and how the pipeline works
 
 - **Source control**: GitHub (`Nayannyk/demo-kube`), branch split:
   - `main` → application code only (`app/`, `frontend/`, `Jenkinsfile`)
@@ -116,7 +360,7 @@ git push (app/frontend change) on main
 `manifests`-branch commits (created by the pipeline itself) do **not** re-trigger
 builds, so there is no infinite loop.
 
-## 6. Container images
+## 7. Container images
 
 | Image | Base | Contents | Notes |
 |-------|------|----------|-------|
@@ -129,16 +373,16 @@ the current image tag from `k8s/backend.yaml` on the `manifests` branch and
 increments the patch version for each build; if the current tag is not a semver
 (e.g. an older git SHA) it starts from `0.0.1`.
 
-## 7. Monitoring (Prometheus + Grafana)
+## 8. Monitoring (Prometheus + Grafana)
 
 - GitOps-managed: `monitoring/application.yaml` on the `manifests` branch →
   ArgoCD installs **kube-prometheus-stack** (Helm chart `88.3.0`) into
   `monitoring`
-- **Prometheus**: `http://3.110.147.28:9090` — 22+ scrape targets up
+- **Prometheus**: `http://<server-public-ip>:9090` — 22+ scrape targets up
   (node-exporter ×3, kube-state-metrics, kubelet, API server, CoreDNS,
   Prometheus/AlertManager/Grafana). Scrapes the cluster itself plus the
   operators' ServiceMonitors.
-- **Grafana**: `http://3.110.147.28:3000` — login **admin / admin**, ships
+- **Grafana**: `http://<server-public-ip>:3000` — login **admin / admin**, ships
   **29 pre-built dashboards** (Kubernetes API server, Compute Resources
   Cluster/Node/Pod/Namespace, etcd, CoreDNS, Alertmanager, Grafana …)
 - Components: Prometheus, AlertManager, Grafana, prometheus-operator,
@@ -147,7 +391,7 @@ increments the patch version for each build; if the current tag is not a semver
   disabled and `Prune=false`) because ArgoCD cannot client-side apply these
   large CRDs.
 
-## 8. Repo layout
+## 9. Repo layout
 
 ```
 app/           Flask backend + Dockerfile + tests
@@ -155,10 +399,11 @@ frontend/      nginx chat UI + Dockerfile + tests
 k8s/           Kubernetes manifests — one file per resource (namespace.yaml, app-config.yaml, app-secret.yaml, redis.yaml, backend.yaml, backend-service.yaml, frontend.yaml, frontend-service.yaml, frontend-config.yaml)
 argocd/        ArgoCD ApplicationSet (targets k8s/ on the manifests branch)
 monitoring/    ArgoCD Application + values for kube-prometheus-stack
+kind.yaml      kind cluster config (set `apiServerAddress` to the EC2 private IP)
 Jenkinsfile    CI/CD pipeline (webhook-triggered, self-bump + GitOps)
 ```
 
-## 9. Local run
+## 10. Local run
 
 ```bash
 docker compose up --build
