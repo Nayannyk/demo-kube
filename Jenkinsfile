@@ -5,8 +5,7 @@ pipeline {
         string(name: 'IMAGE_NAME', defaultValue: 'nayannyk/demo-backend', description: 'Docker Hub image name (namespace/repo)')
         string(name: 'FRONTEND_IMAGE_NAME', defaultValue: 'nayannyk/demo-frontend', description: 'Docker Hub frontend image name (namespace/repo)')
         string(name: 'GIT_REPO_URL', defaultValue: 'github.com/Nayannyk/demo-kube.git', description: 'GitHub repo path')
-        string(name: 'GIT_BRANCH', defaultValue: 'main', description: 'Branch to push the manifest bump to')
-        string(name: 'GIT_IDENTITY', defaultValue: 'jenkins-cd <jenkins@demo.local>', description: 'git author: "Name <email>"')
+        string(name: 'MANIFESTS_BRANCH', defaultValue: 'manifests', description: 'Branch ArgoCD syncs from (k8s/ + argocd/ manifests)')
         string(name: 'CLUSTER_NAME', defaultValue: '172.31.40.76:33893', description: 'Cluster name as registered in ArgoCD')
         string(name: 'CLUSTER_SERVER', defaultValue: 'https://172.31.40.76:33893', description: 'Kubernetes API server URL of the ArgoCD cluster')
     }
@@ -15,8 +14,7 @@ pipeline {
         IMAGE_NAME = "${params.IMAGE_NAME ?: 'nayannyk/demo-backend'}"
         FRONTEND_IMAGE_NAME = "${params.FRONTEND_IMAGE_NAME ?: 'nayannyk/demo-frontend'}"
         GIT_REPO_URL = "${params.GIT_REPO_URL ?: 'github.com/Nayannyk/demo-kube.git'}"
-        GIT_BRANCH = "${params.GIT_BRANCH ?: 'main'}"
-        GIT_IDENTITY = "${params.GIT_IDENTITY ?: 'jenkins-cd <jenkins@demo.local>'}"
+        MANIFESTS_BRANCH = "${params.MANIFESTS_BRANCH ?: 'manifests'}"
         CLUSTER_NAME = "${params.CLUSTER_NAME ?: '172.31.40.76:33893'}"
         CLUSTER_SERVER = "${params.CLUSTER_SERVER ?: 'https://172.31.40.76:33893'}"
         KUBECONFIG_PATH = '/var/lib/jenkins/.kube/config'
@@ -35,8 +33,10 @@ pipeline {
             }
         }
 
-        // Avoid an infinite CI loop: manifest-only commits (made by this pipeline)
-        // must NOT trigger a rebuild. Only app/ code or the Jenkinsfile trigger builds.
+        // Branching strategy:
+        //   main      -> app code only (app/, frontend/, Jenkinsfile). Pushes trigger the build.
+        //   manifests -> k8s/ + argocd/ only. ArgoCD auto-syncs on every push.
+        //                Manifest-only pushes must NOT trigger a rebuild.
         stage('Detect App Changes') {
             steps {
                 script {
@@ -49,7 +49,7 @@ pipeline {
                         it.startsWith('app/') || it.startsWith('frontend/') || it == 'Jenkinsfile'
                     }
                     if (!appChanged) {
-                        echo "Only Kubernetes manifests changed -> nothing to build."
+                        echo "Only Kubernetes manifests changed -> nothing to build (ArgoCD will sync)."
                         env.SKIP_BUILD = 'true'
                     } else {
                         env.SKIP_BUILD = 'false'
@@ -89,53 +89,29 @@ pipeline {
                 ]) {
                     sh '''
                         echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        # immutable SHA tag + rolling latest tag for Argo CD Image Updater
+                        docker tag "$IMAGE_NAME:$IMAGE_TAG" "$IMAGE_NAME:latest"
+                        docker tag "$FRONTEND_IMAGE_NAME:$IMAGE_TAG" "$FRONTEND_IMAGE_NAME:latest"
                         docker push "$IMAGE_NAME:$IMAGE_TAG"
+                        docker push "$IMAGE_NAME:latest"
                         docker push "$FRONTEND_IMAGE_NAME:$IMAGE_TAG"
+                        docker push "$FRONTEND_IMAGE_NAME:latest"
                     '''
                 }
             }
         }
 
-        stage('Update Manifest & Commit') {
-            when { expression { env.SKIP_BUILD == 'false' } }
-            steps {
-                script {
-                    sh '''
-                        sed -i "s|image: .*|image: $IMAGE_NAME:$IMAGE_TAG|" k8s/app.yaml
-                        sed -i "s|image: .*|image: $FRONTEND_IMAGE_NAME:$IMAGE_TAG|" k8s/frontend.yaml
-                        GIT_NAME=$(echo "$GIT_IDENTITY" | sed -E 's/ <.*>//')
-                        GIT_EMAIL=$(echo "$GIT_IDENTITY" | sed -E 's/.*<([^>]+)>.*/\1/')
-                        git config user.name  "$GIT_NAME"
-                        git config user.email "$GIT_EMAIL"
-                        git add k8s/app.yaml k8s/frontend.yaml
-                        git commit -m "chore(ci): bump backend/frontend image tags to $IMAGE_TAG"
-                    '''
-                    // Store commit SHA to push after ArgoCD sync check
-                    env.MANIFEST_COMMIT = sh(script: "git rev-parse HEAD", returnStdout: true).trim()
-                }
-            }
-        }
-
-        stage('Push to GitHub') {
-            when { expression { env.SKIP_BUILD == 'false' } }
-            steps {
-                withCredentials([
-                    string(credentialsId: 'github-pat', variable: 'GH_PAT')
-                ]) {
-                    sh '''
-                        git push "https://x-access-token:${GH_PAT}@${GIT_REPO_URL}" HEAD:${GIT_BRANCH}
-                    '''
-                }
-            }
-        }
-
-        stage('Deploy to Cluster') {
+        // Image tag updates in k8s/*.yaml are handled automatically by
+        // Argo CD Image Updater (write-back: git) on the manifests branch.
+        stage('Ensure ArgoCD ApplicationSet') {
             steps {
                 script {
                     env.KUBECONFIG = env.KUBECONFIG_PATH
                 }
                 sh '''
-                    kubectl apply -f argocd/appset.yaml
+                    git fetch origin "${MANIFESTS_BRANCH}"
+                    git show "origin/${MANIFESTS_BRANCH}:argocd/appset.yaml" > /tmp/appset.yaml
+                    kubectl apply -f /tmp/appset.yaml
                     kubectl -n argocd get applicationset demo-backend
                 '''
             }
@@ -187,7 +163,8 @@ pipeline {
         success {
             script {
                 if (env.SKIP_BUILD == 'false') {
-                    echo "Deployment handled by ArgoCD (GitOps) - syncing ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+                    echo "Images pushed: ${env.IMAGE_NAME}:${env.IMAGE_TAG} / ${env.FRONTEND_IMAGE_NAME}:${env.IMAGE_TAG}"
+                    echo "Argo CD Image Updater will tag the k8s manifests on ${env.MANIFESTS_BRANCH}; ArgoCD auto-syncs."
                 }
             }
         }

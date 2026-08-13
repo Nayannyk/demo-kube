@@ -11,15 +11,19 @@ Dockerized and deployed to Kubernetes.
   (nginx proxies `/api/` to the backend, so the browser only talks to the frontend)
 - **Dependency**: Redis (`redis:7-alpine`) with password auth
 - **Registry**: Docker Hub (`nayannyk/demo-backend`, `nayannyk/demo-frontend`) via Jenkins CI
-- **Deployment**: Kubernetes manifests in `k8s/` (ArgoCD GitOps)
+- **Deployment**: Kubernetes manifests in `k8s/` on the `manifests` branch (ArgoCD GitOps)
 
 ## Repo layout
 
 ```
+main       branch: app/ + frontend/ + Jenkinsfile (application code only)
+manifests  branch: k8s/ + argocd/ (ArgoCD syncs this branch)
+
 app/          Flask application + Dockerfile + tests
 frontend/     Chat UI (static nginx site) + Dockerfile + tests
-k8s/          Kubernetes manifests (namespace, config, secret, redis, backend, frontend)
-Jenkinsfile   CI/CD pipeline (build -> push registry -> bump manifest tag -> git push)
+k8s/          Kubernetes manifests (namespace, config, secret, redis, backend, frontend) [manifests branch]
+argocd/       ApplicationSet for ArgoCD [manifests branch]
+Jenkinsfile   CI/CD pipeline (build -> push registry with :sha + :latest)
 ```
 
 ## Local run (docker-compose)
@@ -57,14 +61,20 @@ docker run -d --name demo-frontend -p 8081:80 \
 
 ## Kubernetes deployment
 
+The manifests live on the `manifests` branch and are synced by ArgoCD (GitOps).
+
 ```bash
-cd k8s
-kubectl apply -f namespace.yaml
-kubectl apply -f app-secret.yaml
-kubectl apply -f app-config.yaml
-kubectl apply -f redis.yaml
-kubectl apply -f app.yaml
-kubectl apply -f frontend.yaml
+# ArgoCD watches targetRevision=manifests, path k8s/ (see argocd/appset.yaml)
+git clone https://github.com/Nayannyk/demo-kube.git
+git checkout manifests
+
+# Or apply manually from that branch:
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/app-secret.yaml
+kubectl apply -f k8s/app-config.yaml
+kubectl apply -f k8s/redis.yaml
+kubectl apply -f k8s/app.yaml
+kubectl apply -f k8s/frontend.yaml
 
 kubectl -n demo rollout status deployment/backend
 kubectl -n demo rollout status deployment/frontend
@@ -115,21 +125,27 @@ kubectl -n demo port-forward svc/frontend 8081:80   # on the host
 > Note: 8080 is reserved for Jenkins, so the chat UI uses 8081 (compose) /
 > NodePort 30080 (cluster).
 
-## Pipeline flow (Jenkins)
+## Pipeline flow (Jenkins + Argo CD Image Updater)
 
 ```
-git push (app/frontend change)
-      -> Jenkins builds & pushes nayannyk/demo-backend:<sha> + nayannyk/demo-frontend:<sha>
-      -> Jenkins bumps image tags in k8s/app.yaml + k8s/frontend.yaml and commits
-      -> ArgoCD detects change, auto-syncs Deployments
+git push to main (app/frontend change)
+      -> Jenkins builds & pushes nayannyk/demo-backend:<sha> + :latest,
+         nayannyk/demo-frontend:<sha> + :latest
+      -> Argo CD Image Updater sees new :latest tags, updates k8s/*.yaml
+         image tags and commits to the manifests branch (write-back: git)
+      -> ArgoCD detects change on manifests branch, auto-syncs Deployments
       -> Jenkins port-forwards frontend (8081) + backend (5000) on the host
+
+git push to manifests (k8s/argocd change)
+      -> ArgoCD auto-syncs directly; Jenkins skips the build (Detect App Changes)
 ```
 
 ## Notes
 
 - Backend image tag in `k8s/app.yaml` (`nayannyk/demo-backend:<tag>`) and
   frontend image tag in `k8s/frontend.yaml` (`nayannyk/demo-frontend:<tag>`)
-  are bumped automatically by the Jenkins pipeline.
+  are updated automatically by Argo CD Image Updater (see
+  `argocd/README.md` on the `manifests` branch for credentials setup).
 - Probes: `/health` readiness/liveness on backend (checks Redis), TCP probes on
   Redis, `/` probes on the frontend.
 - Chat messages are kept in a Redis list (`chat:messages`, max 100) and the
