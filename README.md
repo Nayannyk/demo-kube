@@ -28,7 +28,7 @@ Jenkinsfile   CI/CD pipeline (build -> push registry -> bump manifest tag -> git
 docker compose up --build
 ```
 
-- Chat UI: http://localhost:8080
+- Chat UI: http://localhost:8081
 - Backend API: http://localhost:5000
 - Health: http://localhost:5000/health
 - Info: http://localhost:5000/info
@@ -46,7 +46,7 @@ docker run -d --name demo-backend -p 5000:5000 \
   demo-backend:local
 
 docker build -t demo-frontend:local ./frontend
-docker run -d --name demo-frontend -p 8080:80 \
+docker run -d --name demo-frontend -p 8081:80 \
   -e BACKEND_URL=http://host.docker.internal:5000 \
   demo-frontend:local
 ```
@@ -69,8 +69,8 @@ kubectl -n demo get pods,svc
 # Access the chat UI (NodePort):
 #   http://<node-ip>:30080
 # or port-forward the ClusterIP/NodePort:
-kubectl -n demo port-forward svc/frontend 8080:80
-# then open http://localhost:8080
+kubectl -n demo port-forward svc/frontend 8081:80
+# then open http://localhost:8081
 ```
 
 ## Pipeline flow (Jenkins)
