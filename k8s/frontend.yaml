@@ -50,25 +50,3 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 2
             failureThreshold: 3
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: frontend
-  namespace: demo
-spec:
-  type: NodePort
-  selector:
-    app: frontend
-  ports:
-    - port: 80
-      targetPort: 80
-      nodePort: 30080
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: frontend-config
-  namespace: demo
-data:
-  BACKEND_URL: "http://backend:80"
