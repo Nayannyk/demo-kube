@@ -1,0 +1,9 @@
+grafana:
+  adminPassword: admin
+prometheus:
+  prometheusSpec:
+    replicas: 1
+    retention: 72h
+alertmanager:
+  alertmanagerSpec:
+    replicas: 1
