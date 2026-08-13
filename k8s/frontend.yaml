@@ -18,7 +18,7 @@ spec:
       containers:
         - name: frontend
           # image tag is bumped by the CI/CD pipeline (Jenkins) on every build
-          image: nayannyk/demo-frontend:a1f8db6
+          image: nayannyk/demo-frontend:ae443c5
           ports:
             - containerPort: 80
           env:
