@@ -6,7 +6,9 @@ COPY app.js /usr/share/nginx/html/app.js
 COPY nginx.conf.template /etc/nginx/conf.d/default.conf.template
 COPY entrypoint.sh /entrypoint.sh
 
-RUN chmod +x /entrypoint.sh
+# Normalize line endings: Windows git checkouts can leave CRLF, which breaks /bin/sh
+RUN sed -i 's/\r$//' /entrypoint.sh /etc/nginx/conf.d/default.conf.template \
+    && chmod +x /entrypoint.sh
 
 EXPOSE 80
 

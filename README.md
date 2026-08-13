@@ -32,7 +32,10 @@ docker compose up --build
 - Backend API: http://localhost:5000
 - Health: http://localhost:5000/health
 - Info: http://localhost:5000/info
-- Messages API: `GET /api/messages`, `POST /api/messages` (`{username, text}`)
+- Messages API: `GET /api/messages`, `POST /api/messages` (`{username, text}`,
+  optional `attachment` `{type: image|video, url}`)
+- Attachments: `POST /api/upload` (multipart `file`, images/videos ≤ 10 MB,
+  stored in Redis for 24h) + `GET /api/files/<id>`
 
 ## Docker build
 
