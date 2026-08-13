@@ -1,154 +1,165 @@
-# demo-backend (chat-app)
+# demo-kube — Chat App with Full CI/CD (Jenkins + GitHub) and GitOps CD (ArgoCD) + Monitoring (Prometheus / Grafana)
 
-Flask backend + nginx frontend chat app with Redis as a service dependency,
-Dockerized and deployed to Kubernetes.
+This project is a complete, production-style demo: a chat application is built,
+tested, containerized, published to Docker Hub, deployed to Kubernetes via
+GitOps (ArgoCD) and monitored with Prometheus + Grafana — all from a GitHub
+push to `main`.
 
-## Stack
+---
 
-- **Backend**: Python Flask (`app/`) with a Redis-backed chat API and Redis as a
-  service dependency
-- **Frontend**: nginx-served chat UI (`frontend/`) that polls the backend API
-  (nginx proxies `/api/` to the backend, so the browser only talks to the frontend)
-- **Dependency**: Redis (`redis:7-alpine`) with password auth
-- **Registry**: Docker Hub (`nayannyk/demo-backend`, `nayannyk/demo-frontend`) via Jenkins CI
-- **Deployment**: Kubernetes manifests in `k8s/` on the `manifests` branch (ArgoCD GitOps)
+## 1. Application (technology stack)
 
-## Repo layout
+A chat app made of two services plus a Redis dependency:
+
+| Component | Technology | Details |
+|-----------|------------|---------|
+| **Backend** (`app/`) | **Python 3.12** + **Flask 3.0.3** + **Redis client 5.0.8** | REST API; messages stored in Redis (`chat:messages`, max 100); attachments (images/videos ≤ 10 MB) stored 24 h; `/health` probe checks Redis; runs as non-root (`USER 65534`) |
+| **Frontend** (`frontend/`) | **nginx 1.27-alpine** static site (HTML/CSS/vanilla JS) | Polls `/api/messages` every 2 s; nginx proxies `/api` → backend (URL injected at boot via `envsubst` in `entrypoint.sh`) |
+| **Cache / store** | **Redis 7-alpine** | Password-protected; not built — pulled as infra image |
+
+Backend API endpoints:
+`GET /health`, `GET /info`, `GET /api/messages`, `POST /api/messages`
+(`{username, text}`, optional `attachment {type, url}`), `DELETE /api/messages`,
+`POST /api/upload` (multipart), `GET /api/files/<id>`.
+
+Frontend shows a `v1.1.0 · GitOps (ArgoCD + Jenkins)` footer.
+
+## 2. Infrastructure
+
+The pipeline runs on a single **EC2 host** (`ubuntu@3.110.147.28`,
+Ubuntu 22.04) that also hosts a **kind** Kubernetes cluster.
+
+### Kubernetes cluster (on the EC2 host)
+
+- **kind** (Kubernetes in Docker), **Kubernetes v1.36.3**
+- 3 nodes: `demo-cluster-control-plane` + 2 workers (2 vCPU / 8 GB each)
+- Managed from the host via `kubectl`
+
+### Exposed ports
+
+| Port | Service |
+|------|---------|
+| 22 | SSH |
+| 8080 | Jenkins |
+| 3000 | Grafana |
+| 9090 | Prometheus |
+| 30083 | ArgoCD UI (NodePort) |
+| 5000 | Chat app backend API |
+| 8081 | Chat app frontend UI |
+
+## 3. What is installed inside the EC2 machine
+
+| Tool | Purpose |
+|------|---------|
+| Docker | Container runtime + image builds |
+| kind + kubectl | Kubernetes cluster + client (Helm v4.2.3) |
+| git | Repo checkout / pushes |
+| **Jenkins** (systemd service, job `demo-kube`) | CI/CD engine, port 8080 |
+| **ArgoCD v3.5.0** (`argocd` namespace) | GitOps controller / CD |
+| **Demo chat app** (`demo` namespace) | Redis + backend ×2 + frontend ×2 (Deployments with readiness/liveness probes, resource requests/limits) |
+| **kube-prometheus-stack v88.3.0** (`monitoring` namespace) | Prometheus, Grafana, AlertManager, kube-state-metrics, node-exporter (daemonset), prometheus-operator |
+
+## 4. Where the secrets are stored
+
+Secrets are **never committed to git**. Locations:
+
+| Secret | Stored in | Used for |
+|--------|-----------|----------|
+| **GitHub PAT** (`github-pat`) | Jenkins credential store (`/var/lib/jenkins/credentials.xml`, jenkins user only) | Pushing manifest-tag bumps to the `manifests` branch |
+| **Docker Hub credentials** (`dockerhub-creds`) | Jenkins credential store | `docker login` + pushing images |
+| **Redis password** (`backend-secret`) | Kubernetes Secret in `demo` namespace | Backend ↔ Redis auth |
+| **Grafana admin password** | Kubernetes Secret `kube-prometheus-stack-grafana` (`monitoring` ns); pinned `admin`/`admin` via `monitoring/kube-prometheus-stack-values.yaml` | Grafana login |
+| **SSH key** | Local `C:/Users/NAYAN/Downloads/Kind_key.pem` | EC2 access |
+
+- **Jenkins webhook** (id `665159979`): `http://3.110.147.28:8080/github-webhook/`
+  (JSON, push events) — points GitHub → Jenkins.
+- Kubernetes Secrets are base64-encoded in cluster **etcd**; Jenkins credentials
+  are AES-encrypted in `credentials.xml`.
+
+## 5. CI/CD tools and how the pipeline works
+
+- **Source control**: GitHub (`Nayannyk/demo-kube`), branch split:
+  - `main` → application code only (`app/`, `frontend/`, `Jenkinsfile`)
+  - `manifests` → `k8s/` + `argocd/` manifests that **ArgoCD watches**
+- **CI**: **Jenkins** ("Pipeline from SCM", job `demo-kube`, branch `*/main`),
+  triggered by the **GitHub webhook** (`githubPush()`) with SCM polling as
+  fallback
+- **Registry**: **Docker Hub** (`nayannyk/demo-backend`, `nayannyk/demo-frontend`)
+- **CD**: **ArgoCD (GitOps)** — `ApplicationSet demo-backend`:
+  `repoURL = demo-kube`, `targetRevision = manifests`, `path = k8s`,
+  auto-sync + self-heal + prune
+
+### Pipeline stages (Jenkinsfile)
+
+| # | Stage | What it does |
+|---|-------|--------------|
+| 1 | **Checkout** | `checkout scm` (main) |
+| 2 | **Detect App Changes** | If only `k8s/`/`argocd/`/docs changed → skip build (prevents the self-bump from looping) |
+| 3 | **Unit Test** | Python syntax check (`app/`) + frontend test script |
+| 4 | **Build Image** | `docker build` backend + frontend, tag = **short git SHA** (`<sha>`) |
+| 5 | **Push Image** | `docker login` (dockerhub-creds) + push both images to Docker Hub |
+| 6 | **Update Manifest & Commit** | Idempotent: checks out `manifests` branch, `sed`-bumps image tags in `k8s/app.yaml` + `k8s/frontend.yaml` to the new SHA, commits `chore(ci): bump …` only if changed, pushes via `github-pat` |
+| 7 | **Ensure ArgoCD ApplicationSet** | `git show manifests:argocd/appset.yaml \| kubectl apply -f -` |
+| 8 | **Expose Chat App** | `kubectl port-forward` frontend `:8081` + backend `:5000` on the host |
+
+### End-to-end flow
 
 ```
-main       branch: app/ + frontend/ + Jenkinsfile (application code only)
-manifests  branch: k8s/ + argocd/ (ArgoCD syncs this branch)
-
-app/          Flask application + Dockerfile + tests
-frontend/     Chat UI (static nginx site) + Dockerfile + tests
-k8s/          Kubernetes manifests (namespace, config, secret, redis, backend, frontend) [manifests branch]
-argocd/       ApplicationSet for ArgoCD [manifests branch]
-Jenkinsfile   CI/CD pipeline (build -> push registry with :sha + :latest)
+git push (app/frontend change) on main
+  → GitHub webhook → Jenkins build #N
+  → Unit Test → docker build/push nayannyk/demo-{backend,frontend}:<sha>
+  → bump image tags on the manifests branch + push
+  → ArgoCD detects the manifests-branch change → auto-syncs Deployments
+  → app rolled out → port-forwards refreshed (8081 / 5000)
 ```
 
-## Local run (docker-compose)
+`manifests`-branch commits (created by the pipeline itself) do **not** re-trigger
+builds, so there is no infinite loop.
+
+## 6. Container images
+
+| Image | Base | Contents | Notes |
+|-------|------|----------|-------|
+| `nayannyk/demo-backend:<sha>` | `python:3.12-slim` | Flask app (`app.py`) | Non-root, `HEALTHCHECK /health`, exposes 5000 |
+| `nayannyk/demo-frontend:<sha>` | `nginx:1.27-alpine` | static chat UI + `app.js` + nginx conf template | `entrypoint.sh` runs `envsubst` for `BACKEND_URL`, exposes 80 |
+| `redis:7-alpine` | — | infra dependency | used as-is, requires password |
+
+Tags are always the **7-char git short SHA** of the triggering commit, which makes
+every image traceable to its source revision.
+
+## 7. Monitoring (Prometheus + Grafana)
+
+- GitOps-managed: `monitoring/application.yaml` on the `manifests` branch →
+  ArgoCD installs **kube-prometheus-stack** (Helm chart `88.3.0`) into
+  `monitoring`
+- **Prometheus**: `http://3.110.147.28:9090` — 22+ scrape targets up
+  (node-exporter ×3, kube-state-metrics, kubelet, API server, CoreDNS,
+  Prometheus/AlertManager/Grafana). Scrapes the cluster itself plus the
+  operators' ServiceMonitors.
+- **Grafana**: `http://3.110.147.28:3000` — login **admin / admin**, ships
+  **29 pre-built dashboards** (Kubernetes API server, Compute Resources
+  Cluster/Node/Pod/Namespace, etcd, CoreDNS, Alertmanager, Grafana …)
+- Components: Prometheus, AlertManager, Grafana, prometheus-operator,
+  kube-state-metrics, node-exporter
+- Note: the chart's CRDs are installed out-of-band (the `crds` sub-chart is
+  disabled and `Prune=false`) because ArgoCD cannot client-side apply these
+  large CRDs.
+
+## 8. Repo layout
+
+```
+app/           Flask backend + Dockerfile + tests
+frontend/      nginx chat UI + Dockerfile + tests
+k8s/           Kubernetes manifests (namespace, config, secret, redis, backend, frontend)
+argocd/        ArgoCD ApplicationSet (targets k8s/ on the manifests branch)
+monitoring/    ArgoCD Application + values for kube-prometheus-stack
+Jenkinsfile    CI/CD pipeline (webhook-triggered, self-bump + GitOps)
+```
+
+## 9. Local run
 
 ```bash
 docker compose up --build
+# Chat UI http://localhost:8081 · Backend API http://localhost:5000
+# Health http://localhost:5000/health
 ```
-
-- Chat UI: http://localhost:8081
-- Backend API: http://localhost:5000
-- Health: http://localhost:5000/health
-- Info: http://localhost:5000/info
-- Messages API: `GET /api/messages`, `POST /api/messages` (`{username, text}`,
-  optional `attachment` `{type: image|video, url}`), `DELETE /api/messages`
-  (clears all chats + attached files)
-- Attachments: `POST /api/upload` (multipart `file`, images/videos ≤ 10 MB,
-  stored in Redis for 24h) + `GET /api/files/<id>`
-
-## Docker build
-
-```bash
-docker build -t demo-backend:local ./app
-docker run -d --name demo-redis -p 6379:6379 \
-  redis:7-alpine --requirepass demo-pass-123
-docker run -d --name demo-backend -p 5000:5000 \
-  -e REDIS_HOST=host.docker.internal \
-  -e REDIS_PASSWORD=demo-pass-123 \
-  demo-backend:local
-
-docker build -t demo-frontend:local ./frontend
-docker run -d --name demo-frontend -p 8081:80 \
-  -e BACKEND_URL=http://host.docker.internal:5000 \
-  demo-frontend:local
-```
-
-## Kubernetes deployment
-
-The manifests live on the `manifests` branch and are synced by ArgoCD (GitOps).
-
-```bash
-# ArgoCD watches targetRevision=manifests, path k8s/ (see argocd/appset.yaml)
-git clone https://github.com/Nayannyk/demo-kube.git
-git checkout manifests
-
-# Or apply manually from that branch:
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/app-secret.yaml
-kubectl apply -f k8s/app-config.yaml
-kubectl apply -f k8s/redis.yaml
-kubectl apply -f k8s/app.yaml
-kubectl apply -f k8s/frontend.yaml
-
-kubectl -n demo rollout status deployment/backend
-kubectl -n demo rollout status deployment/frontend
-kubectl -n demo get pods,svc
-
-# Access the chat UI directly via NodePort:
-#   http://<node-ip>:30080
-```
-
-## Port forwarding
-
-### Local kubectl (ClusterIP services)
-
-```bash
-# Chat UI  -> http://localhost:8081
-kubectl -n demo port-forward svc/frontend 8081:80
-
-# Backend API -> http://localhost:5000
-kubectl -n demo port-forward svc/backend 5000:80
-
-# Redis (optional, e.g. redis-cli)
-kubectl -n demo port-forward svc/redis 6379:6379
-```
-
-### SSH tunnel to the EC2 pipeline host (kind cluster)
-
-If the cluster is on the EC2 host and you want a private tunnel (no NodePort):
-
-```bash
-# Chat UI  -> http://localhost:8081
-ssh -i C:/Users/NAYAN/Downloads/Kind_key.pem -L 8081:localhost:30080 ubuntu@<public-ip>
-
-# Backend API -> http://localhost:5000
-ssh -i C:/Users/NAYAN/Downloads/Kind_key.pem -L 5000:localhost:30080 ubuntu@<public-ip>
-
-# Multiple tunnels at once
-ssh -i C:/Users/NAYAN/Downloads/Kind_key.pem \
-  -L 8081:localhost:30080 -L 5000:localhost:30080 ubuntu@<public-ip>
-```
-
-### Direct from the EC2 host
-
-```bash
-kubectl -n demo port-forward svc/frontend 8081:80   # on the host
-# then open http://<public-ip>:8081 (SG opens port 8081)
-```
-
-> Note: 8080 is reserved for Jenkins, so the chat UI uses 8081 (compose) /
-> NodePort 30080 (cluster).
-
-## Pipeline flow (Jenkins)
-
-A GitHub webhook (`http://<jenkins>:8080/github-webhook/`) + the job's
-`githubPush()` trigger starts the pipeline on any push to `main`.
-
-```
-git push to main (app/frontend change)
-      -> Jenkins builds & pushes nayannyk/demo-backend:<sha> + nayannyk/demo-frontend:<sha>
-      -> Jenkins bumps image tags in k8s/app.yaml + k8s/frontend.yaml and commits
-         them to the manifests branch, then pushes
-      -> ArgoCD detects change on manifests branch, auto-syncs Deployments
-      -> Jenkins port-forwards frontend (8081) + backend (5000) on the host
-
-git push to manifests (k8s/argocd change)
-      -> ArgoCD auto-syncs directly; no Jenkins build (job watches */main only)
-```
-
-## Notes
-
-- Backend image tag in `k8s/app.yaml` (`nayannyk/demo-backend:<tag>`) and
-  frontend image tag in `k8s/frontend.yaml` (`nayannyk/demo-frontend:<tag>`)
-  are bumped automatically by the Jenkins pipeline and committed to the
-  `manifests` branch.
-- Probes: `/health` readiness/liveness on backend (checks Redis), TCP probes on
-  Redis, `/` probes on the frontend.
-- Chat messages are kept in a Redis list (`chat:messages`, max 100) and the
-  frontend polls `/api/messages` every 2s.
