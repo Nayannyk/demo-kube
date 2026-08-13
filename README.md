@@ -125,14 +125,13 @@ kubectl -n demo port-forward svc/frontend 8081:80   # on the host
 > Note: 8080 is reserved for Jenkins, so the chat UI uses 8081 (compose) /
 > NodePort 30080 (cluster).
 
-## Pipeline flow (Jenkins + Argo CD Image Updater)
+## Pipeline flow (Jenkins)
 
 ```
 git push to main (app/frontend change)
-      -> Jenkins builds & pushes nayannyk/demo-backend:<sha> + :latest,
-         nayannyk/demo-frontend:<sha> + :latest
-      -> Argo CD Image Updater sees new :latest tags, updates k8s/*.yaml
-         image tags and commits to the manifests branch (write-back: git)
+      -> Jenkins builds & pushes nayannyk/demo-backend:<sha> + nayannyk/demo-frontend:<sha>
+      -> Jenkins bumps image tags in k8s/app.yaml + k8s/frontend.yaml and commits
+         them to the manifests branch, then pushes
       -> ArgoCD detects change on manifests branch, auto-syncs Deployments
       -> Jenkins port-forwards frontend (8081) + backend (5000) on the host
 
@@ -144,8 +143,8 @@ git push to manifests (k8s/argocd change)
 
 - Backend image tag in `k8s/app.yaml` (`nayannyk/demo-backend:<tag>`) and
   frontend image tag in `k8s/frontend.yaml` (`nayannyk/demo-frontend:<tag>`)
-  are updated automatically by Argo CD Image Updater (see
-  `argocd/README.md` on the `manifests` branch for credentials setup).
+  are bumped automatically by the Jenkins pipeline and committed to the
+  `manifests` branch.
 - Probes: `/health` readiness/liveness on backend (checks Redis), TCP probes on
   Redis, `/` probes on the frontend.
 - Chat messages are kept in a Redis list (`chat:messages`, max 100) and the
