@@ -26,7 +26,7 @@ Frontend shows a `v1.1.0 · GitOps (ArgoCD + Jenkins)` footer.
 
 ## 2. Infrastructure
 
-The pipeline runs on a single **EC2 host** (`ubuntu@3.110.147.28`,
+The pipeline runs on a single **EC2 host** (`ubuntu`,
 Ubuntu 22.04) that also hosts a **kind** Kubernetes cluster.
 
 ### Kubernetes cluster (on the EC2 host)
