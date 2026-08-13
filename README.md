@@ -127,6 +127,9 @@ kubectl -n demo port-forward svc/frontend 8081:80   # on the host
 
 ## Pipeline flow (Jenkins)
 
+A GitHub webhook (`http://<jenkins>:8080/github-webhook/`) + the job's
+`githubPush()` trigger starts the pipeline on any push to `main`.
+
 ```
 git push to main (app/frontend change)
       -> Jenkins builds & pushes nayannyk/demo-backend:<sha> + nayannyk/demo-frontend:<sha>
@@ -136,7 +139,7 @@ git push to main (app/frontend change)
       -> Jenkins port-forwards frontend (8081) + backend (5000) on the host
 
 git push to manifests (k8s/argocd change)
-      -> ArgoCD auto-syncs directly; Jenkins skips the build (Detect App Changes)
+      -> ArgoCD auto-syncs directly; no Jenkins build (job watches */main only)
 ```
 
 ## Notes
