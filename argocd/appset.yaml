@@ -18,11 +18,19 @@ spec:
       namespace: argocd
       labels:
         app.kubernetes.io/part-of: demo-kube
+      # Argo CD Image Updater: watch Docker Hub and auto-update image tags in
+      # k8s/*.yaml on the `manifests` branch (write-back method: git).
+      annotations:
+        argocd-image-updater.argoproj.io/image-list: backend=nayannyk/demo-backend,frontend=nayannyk/demo-frontend
+        argocd-image-updater.argoproj.io/backend.update-strategy: latest
+        argocd-image-updater.argoproj.io/frontend.update-strategy: latest
+        argocd-image-updater.argoproj.io/write-back-method: git:secret:argocd/image-updater-creds
+        argocd-image-updater.argoproj.io/git-branch: manifests
     spec:
       project: default
       source:
         repoURL: https://github.com/Nayannyk/demo-kube.git
-        targetRevision: main
+        targetRevision: manifests
         path: k8s
       destination:
         server: '{{url}}'
