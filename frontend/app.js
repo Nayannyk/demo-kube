@@ -5,6 +5,7 @@ const textEl = document.getElementById("text");
 const fileEl = document.getElementById("file");
 const attachBtn = document.getElementById("attach");
 const sendBtn = document.getElementById("send");
+const clearBtn = document.getElementById("clear");
 const statusEl = document.getElementById("status");
 
 const API_MESSAGES = "/api/messages";
@@ -176,6 +177,27 @@ async function sendMessage(event) {
   }
 }
 
+async function clearChat() {
+  const confirmed = window.confirm("Delete all chats? This cannot be undone.");
+  if (!confirmed) return;
+
+  clearBtn.disabled = true;
+  try {
+    const resp = await fetch(API_MESSAGES, { method: "DELETE" });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    messagesEl.innerHTML = "";
+    lastCount = 0;
+    firstLoad = true;
+    setStatus("chat cleared", "chat__status--online");
+  } catch (err) {
+    setStatus("delete failed", "chat__status--offline");
+    console.error("delete failed:", err);
+  } finally {
+    clearBtn.disabled = false;
+  }
+}
+
 composeEl.addEventListener("submit", sendMessage);
+clearBtn.addEventListener("click", clearChat);
 poll();
 setInterval(poll, POLL_MS);

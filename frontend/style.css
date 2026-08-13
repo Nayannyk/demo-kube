@@ -51,6 +51,30 @@ body {
   font-weight: 600;
 }
 
+.chat__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chat__clear {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.chat__clear:hover {
+  color: #f87171;
+}
+
+.chat__clear:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .chat__status {
   font-size: 12px;
   color: var(--muted);

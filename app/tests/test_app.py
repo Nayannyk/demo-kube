@@ -125,3 +125,31 @@ def test_message_rejects_invalid_attachment(client):
         },
     )
     assert resp.status_code == 400
+
+
+def test_clear_messages_deletes_everything(client):
+    client.post("/api/messages", json={"username": "alice", "text": "one"})
+    client.post("/api/messages", json={"username": "bob", "text": "two"})
+    upload = client.post(
+        "/api/upload",
+        data={"file": (io.BytesIO(b"\x89PNG\r\n"), "pic.png", "image/png")},
+        content_type="multipart/form-data",
+    )
+    url = upload.get_json()["url"]
+    client.post(
+        "/api/messages",
+        json={
+            "username": "alice",
+            "text": "with pic",
+            "attachment": {"type": "image", "url": url, "name": "pic.png"},
+        },
+    )
+
+    clear = client.delete("/api/messages")
+    assert clear.status_code == 200
+    result = clear.get_json()
+    assert result["cleared"] == 3
+    assert result["files_removed"] == 1
+
+    assert client.get("/api/messages").get_json()["messages"] == []
+    assert client.get(url).status_code == 404

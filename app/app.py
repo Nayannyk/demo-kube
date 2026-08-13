@@ -99,6 +99,29 @@ def list_messages():
     return jsonify({"messages": messages})
 
 
+@app.route("/api/messages", methods=["DELETE"])
+def clear_messages():
+    r = get_redis()
+    try:
+        raw = r.lrange(CHAT_KEY, 0, -1)
+        cleared = len(raw)
+        if cleared:
+            r.delete(CHAT_KEY)
+        files_removed = 0
+        for entry in raw:
+            try:
+                msg = json.loads(entry)
+            except (TypeError, ValueError):
+                continue
+            url = (msg.get("attachment") or {}).get("url") or ""
+            if url.startswith("/api/files/"):
+                file_id = url.rsplit("/", 1)[-1]
+                files_removed += r.delete(f"{FILE_KEY_PREFIX}{file_id}")
+    except redis.RedisError as exc:
+        return jsonify({"error": f"redis error: {exc}"}), 503
+    return jsonify({"cleared": cleared, "files_removed": files_removed})
+
+
 @app.route("/api/messages", methods=["POST"])
 def add_message():
     data = request.get_json(silent=True) or {}

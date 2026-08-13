@@ -10,7 +10,10 @@
   <main class="chat">
     <header class="chat__header">
       <h1>demo chat</h1>
-      <span id="status" class="chat__status">connecting…</span>
+      <div class="chat__header-actions">
+        <span id="status" class="chat__status">connecting…</span>
+        <button id="clear" class="chat__clear" type="button" title="Delete all chats">🗑</button>
+      </div>
     </header>
 
     <section class="chat__body" id="messages" aria-live="polite"></section>
