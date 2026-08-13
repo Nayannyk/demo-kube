@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>demo chat</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="chat">
+    <header class="chat__header">
+      <h1>demo chat</h1>
+      <span id="status" class="chat__status">connecting…</span>
+    </header>
+
+    <section class="chat__body" id="messages" aria-live="polite"></section>
+
+    <form id="compose" class="chat__compose" autocomplete="off">
+      <input id="username" class="chat__input chat__input--name" type="text"
+             placeholder="Your name" maxlength="50" required />
+      <input id="text" class="chat__input chat__input--text" type="text"
+             placeholder="Type a message…" maxlength="500" required />
+      <button id="send" class="chat__send" type="submit">Send</button>
+    </form>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

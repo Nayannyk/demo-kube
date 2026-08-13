@@ -1,8 +1,10 @@
+import json
 import os
 import socket
+import time
 
 import redis
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
@@ -11,6 +13,11 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
 
 APP_VERSION = os.getenv("APP_VERSION", "dev")
+
+CHAT_KEY = "chat:messages"
+CHAT_MAX_MESSAGES = 100
+CHAT_MAX_TEXT = 500
+CHAT_MAX_USERNAME = 50
 
 
 def get_redis():
@@ -68,6 +75,50 @@ def info():
             "redis_port": REDIS_PORT,
         }
     )
+
+
+@app.route("/api/messages", methods=["GET"])
+def list_messages():
+    r = get_redis()
+    try:
+        raw = r.lrange(CHAT_KEY, 0, -1)
+    except redis.RedisError as exc:
+        return jsonify({"error": f"redis error: {exc}"}), 503
+    messages = []
+    for entry in raw:
+        try:
+            messages.append(json.loads(entry))
+        except (TypeError, ValueError):
+            continue
+    return jsonify({"messages": messages})
+
+
+@app.route("/api/messages", methods=["POST"])
+def add_message():
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username", "")).strip()
+    text = str(data.get("text", "")).strip()
+    if not username:
+        return jsonify({"error": "username is required"}), 400
+    if not text:
+        return jsonify({"error": "text is required"}), 400
+    if len(username) > CHAT_MAX_USERNAME:
+        username = username[:CHAT_MAX_USERNAME]
+    if len(text) > CHAT_MAX_TEXT:
+        text = text[:CHAT_MAX_TEXT]
+    message = {
+        "id": f"{int(time.time() * 1000)}-{socket.gethostname()}",
+        "username": username,
+        "text": text,
+        "ts": int(time.time()),
+    }
+    r = get_redis()
+    try:
+        r.rpush(CHAT_KEY, json.dumps(message))
+        r.ltrim(CHAT_KEY, -CHAT_MAX_MESSAGES, -1)
+    except redis.RedisError as exc:
+        return jsonify({"error": f"redis error: {exc}"}), 503
+    return jsonify({"message": message}), 201
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ pipeline {
 
     parameters {
         string(name: 'IMAGE_NAME', defaultValue: 'nayannyk/demo-backend', description: 'Docker Hub image name (namespace/repo)')
+        string(name: 'FRONTEND_IMAGE_NAME', defaultValue: 'nayannyk/demo-frontend', description: 'Docker Hub frontend image name (namespace/repo)')
         string(name: 'GIT_REPO_URL', defaultValue: 'github.com/Nayannyk/demo-kube.git', description: 'GitHub repo path')
         string(name: 'GIT_BRANCH', defaultValue: 'main', description: 'Branch to push the manifest bump to')
         string(name: 'GIT_IDENTITY', defaultValue: 'jenkins-cd <jenkins@demo.local>', description: 'git author: "Name <email>"')
@@ -12,6 +13,7 @@ pipeline {
 
     environment {
         IMAGE_NAME = "${params.IMAGE_NAME ?: 'nayannyk/demo-backend'}"
+        FRONTEND_IMAGE_NAME = "${params.FRONTEND_IMAGE_NAME ?: 'nayannyk/demo-frontend'}"
         GIT_REPO_URL = "${params.GIT_REPO_URL ?: 'github.com/Nayannyk/demo-kube.git'}"
         GIT_BRANCH = "${params.GIT_BRANCH ?: 'main'}"
         GIT_IDENTITY = "${params.GIT_IDENTITY ?: 'jenkins-cd <jenkins@demo.local>'}"
@@ -44,7 +46,7 @@ pipeline {
                     ).trim().readLines()
                     echo "Changed files: ${changed}"
                     def appChanged = changed.any {
-                        it.startsWith('app/') || it == 'Jenkinsfile'
+                        it.startsWith('app/') || it.startsWith('frontend/') || it == 'Jenkinsfile'
                     }
                     if (!appChanged) {
                         echo "Only Kubernetes manifests changed -> nothing to build."
@@ -63,6 +65,7 @@ pipeline {
                     cd app
                     python3 -c "import ast; ast.parse(open('app.py').read()); print('syntax OK')"
                 '''
+                sh 'sh frontend/tests/check.sh'
             }
         }
 
@@ -74,6 +77,7 @@ pipeline {
                     echo "Building ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
                 }
                 sh 'docker build -t "$IMAGE_NAME:$IMAGE_TAG" app/'
+                sh 'docker build -t "$FRONTEND_IMAGE_NAME:$IMAGE_TAG" frontend/'
             }
         }
 
@@ -86,6 +90,7 @@ pipeline {
                     sh '''
                         echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
                         docker push "$IMAGE_NAME:$IMAGE_TAG"
+                        docker push "$FRONTEND_IMAGE_NAME:$IMAGE_TAG"
                     '''
                 }
             }
@@ -97,12 +102,13 @@ pipeline {
                 script {
                     sh '''
                         sed -i "s|image: .*|image: $IMAGE_NAME:$IMAGE_TAG|" k8s/app.yaml
+                        sed -i "s|image: .*|image: $FRONTEND_IMAGE_NAME:$IMAGE_TAG|" k8s/frontend.yaml
                         GIT_NAME=$(echo "$GIT_IDENTITY" | sed -E 's/ <.*>//')
                         GIT_EMAIL=$(echo "$GIT_IDENTITY" | sed -E 's/.*<([^>]+)>.*/\1/')
                         git config user.name  "$GIT_NAME"
                         git config user.email "$GIT_EMAIL"
-                        git add k8s/app.yaml
-                        git commit -m "chore(ci): bump backend image tag to $IMAGE_TAG"
+                        git add k8s/app.yaml k8s/frontend.yaml
+                        git commit -m "chore(ci): bump backend/frontend image tags to $IMAGE_TAG"
                     '''
                     // Store commit SHA to push after ArgoCD sync check
                     env.MANIFEST_COMMIT = sh(script: "git rev-parse HEAD", returnStdout: true).trim()
