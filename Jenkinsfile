@@ -122,13 +122,21 @@ pipeline {
                         sed -i "s|image: .*|image: $IMAGE_NAME:$IMAGE_TAG|" k8s/app.yaml
                         sed -i "s|image: .*|image: $FRONTEND_IMAGE_NAME:$IMAGE_TAG|" k8s/frontend.yaml
 
-                        GIT_NAME=$(echo "$GIT_IDENTITY" | sed -E 's/ <.*>//')
-                        GIT_EMAIL=$(echo "$GIT_IDENTITY" | sed -E 's/.*<([^>]+)>.*/\1/')
+                        GIT_NAME=$(echo "$GIT_IDENTITY" | sed -E 's/ <.*>//' || true)
+                        GIT_EMAIL=$(echo "$GIT_IDENTITY" | sed -E 's/.*<([^>]+)>.*/\1/' || true)
+                        [ -n "$GIT_NAME" ] || GIT_NAME='jenkins-cd'
+                        [ -n "$GIT_EMAIL" ] || GIT_EMAIL='jenkins@demo.local'
                         git config user.name  "$GIT_NAME"
                         git config user.email "$GIT_EMAIL"
-                        git add k8s/app.yaml k8s/frontend.yaml
-                        git commit -m "chore(ci): bump backend/frontend image tags to $IMAGE_TAG"
-                        git push "https://x-access-token:${GH_PAT}@${GIT_REPO_URL}" "$MANIFESTS_BRANCH"
+
+                        # Idempotent: skip commit/push if manifests already reference this tag.
+                        if git diff --quiet k8s/app.yaml k8s/frontend.yaml; then
+                            echo "k8s manifests already reference $IMAGE_TAG - nothing to commit"
+                        else
+                            git add k8s/app.yaml k8s/frontend.yaml
+                            git commit -m "chore(ci): bump backend/frontend image tags to $IMAGE_TAG"
+                            git push "https://x-access-token:${GH_PAT}@${GIT_REPO_URL}" "$MANIFESTS_BRANCH"
+                        fi
 
                         # back to the code branch for the remaining stages
                         git checkout -f main
