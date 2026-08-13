@@ -96,9 +96,9 @@ Secrets are **never committed to git**. Locations:
 | 1 | **Checkout** | `checkout scm` (main) |
 | 2 | **Detect App Changes** | If only `k8s/`/`argocd/`/docs changed → skip build (prevents the self-bump from looping) |
 | 3 | **Unit Test** | Python syntax check (`app/`) + frontend test script |
-| 4 | **Build Image** | `docker build` backend + frontend, tag = **short git SHA** (`<sha>`) |
+| 4 | **Build Image** | Reads last image tag from `k8s/backend.yaml` on `manifests`, patch-increments it → tag = **sequential semver** (`0.0.1`, `0.0.2`, …), then `docker build` backend + frontend |
 | 5 | **Push Image** | `docker login` (dockerhub-creds) + push both images to Docker Hub |
-| 6 | **Update Manifest & Commit** | Idempotent: checks out `manifests` branch, `sed`-bumps image tags in `k8s/app.yaml` + `k8s/frontend.yaml` to the new SHA, commits `chore(ci): bump …` only if changed, pushes via `github-pat` |
+| 6 | **Update Manifest & Commit** | Idempotent: checks out `manifests` branch, `sed`-bumps image tags in `k8s/backend.yaml` + `k8s/frontend.yaml` (and `APP_VERSION` in `k8s/app-config.yaml`) to the new semver, commits `chore(ci): bump …` only if changed, pushes via `github-pat` |
 | 7 | **Ensure ArgoCD ApplicationSet** | `git show manifests:argocd/appset.yaml \| kubectl apply -f -` |
 | 8 | **Expose Chat App** | `kubectl port-forward` frontend `:8081` + backend `:5000` on the host |
 
@@ -107,7 +107,7 @@ Secrets are **never committed to git**. Locations:
 ```
 git push (app/frontend change) on main
   → GitHub webhook → Jenkins build #N
-  → Unit Test → docker build/push nayannyk/demo-{backend,frontend}:<sha>
+  → Unit Test → docker build/push nayannyk/demo-{backend,frontend}:<semver>
   → bump image tags on the manifests branch + push
   → ArgoCD detects the manifests-branch change → auto-syncs Deployments
   → app rolled out → port-forwards refreshed (8081 / 5000)
@@ -120,12 +120,14 @@ builds, so there is no infinite loop.
 
 | Image | Base | Contents | Notes |
 |-------|------|----------|-------|
-| `nayannyk/demo-backend:<sha>` | `python:3.12-slim` | Flask app (`app.py`) | Non-root, `HEALTHCHECK /health`, exposes 5000 |
-| `nayannyk/demo-frontend:<sha>` | `nginx:1.27-alpine` | static chat UI + `app.js` + nginx conf template | `entrypoint.sh` runs `envsubst` for `BACKEND_URL`, exposes 80 |
+| `nayannyk/demo-backend:<semver>` | `python:3.12-slim` | Flask app (`app.py`) | Non-root, `HEALTHCHECK /health`, exposes 5000 |
+| `nayannyk/demo-frontend:<semver>` | `nginx:1.27-alpine` | static chat UI + `app.js` + nginx conf template | `entrypoint.sh` runs `envsubst` for `BACKEND_URL`, exposes 80 |
 | `redis:7-alpine` | — | infra dependency | used as-is, requires password |
 
-Tags are always the **7-char git short SHA** of the triggering commit, which makes
-every image traceable to its source revision.
+Tags are **sequential semantic versions** (`0.0.1`, `0.0.2`, …). The pipeline reads
+the current image tag from `k8s/backend.yaml` on the `manifests` branch and
+increments the patch version for each build; if the current tag is not a semver
+(e.g. an older git SHA) it starts from `0.0.1`.
 
 ## 7. Monitoring (Prometheus + Grafana)
 
@@ -150,7 +152,7 @@ every image traceable to its source revision.
 ```
 app/           Flask backend + Dockerfile + tests
 frontend/      nginx chat UI + Dockerfile + tests
-k8s/           Kubernetes manifests (namespace, config, secret, redis, backend, frontend)
+k8s/           Kubernetes manifests — one file per resource (namespace.yaml, app-config.yaml, app-secret.yaml, redis.yaml, backend.yaml, backend-service.yaml, frontend.yaml, frontend-service.yaml, frontend-config.yaml)
 argocd/        ArgoCD ApplicationSet (targets k8s/ on the manifests branch)
 monitoring/    ArgoCD Application + values for kube-prometheus-stack
 Jenkinsfile    CI/CD pipeline (webhook-triggered, self-bump + GitOps)

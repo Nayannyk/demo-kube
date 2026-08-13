@@ -82,7 +82,18 @@ pipeline {
             when { expression { env.SKIP_BUILD == 'false' } }
             steps {
                 script {
-                    env.IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    // Sequential semver tag: read the last image tag from the manifests branch
+                    // (e.g. 0.0.1) and increment the patch version -> 0.0.2, 0.0.3, ...
+                    // Falls back to 0.0.1 when the current tag is not a semver (e.g. a git SHA).
+                    env.IMAGE_TAG = sh(
+                        script: '''
+                            git fetch origin "${MANIFESTS_BRANCH}"
+                            cur_tag=$(git show "origin/${MANIFESTS_BRANCH}:k8s/backend.yaml" | grep '^[[:space:]]*image:' | head -1 | sed -E 's/.*://; s/[[:space:]]//g')
+                            if ! echo "$cur_tag" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then cur_tag="0.0.0"; fi
+                            echo "$cur_tag" | awk -F. '{printf "%d.%d.%d\n", $1, $2, $3+1}'
+                        ''',
+                        returnStdout: true
+                    ).trim()
                     echo "Building ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
                 }
                 sh 'docker build -t "$IMAGE_NAME:$IMAGE_TAG" app/'
@@ -105,8 +116,11 @@ pipeline {
             }
         }
 
-        // Write the new image tags back to k8s/app.yaml + k8s/frontend.yaml on the
-        // manifests branch and push. ArgoCD auto-syncs from that branch.
+        // Write the new image tags back to the manifests on the manifests branch and
+        // push. ArgoCD auto-syncs from that branch.
+        //   k8s/backend.yaml         -> backend Deployment image
+        //   k8s/frontend.yaml        -> frontend Deployment image
+        //   k8s/app-config.yaml      -> APP_VERSION (shown in the chat UI footer)
         stage('Update Manifest & Commit') {
             when { expression { env.SKIP_BUILD == 'false' } }
             steps {
@@ -119,8 +133,9 @@ pipeline {
                         git checkout -B "$MANIFESTS_BRANCH" "origin/$MANIFESTS_BRANCH"
                         git pull --rebase origin "$MANIFESTS_BRANCH" || true
 
-                        sed -i "s|image: .*|image: $IMAGE_NAME:$IMAGE_TAG|" k8s/app.yaml
+                        sed -i "s|image: .*|image: $IMAGE_NAME:$IMAGE_TAG|" k8s/backend.yaml
                         sed -i "s|image: .*|image: $FRONTEND_IMAGE_NAME:$IMAGE_TAG|" k8s/frontend.yaml
+                        sed -i "s|APP_VERSION: .*|APP_VERSION: \"$IMAGE_TAG\"|" k8s/app-config.yaml
 
                         GIT_NAME=$(echo "$GIT_IDENTITY" | sed -E 's/ <.*>//' || true)
                         GIT_EMAIL=$(echo "$GIT_IDENTITY" | sed -E 's/.*<([^>]+)>.*/\1/' || true)
@@ -130,11 +145,11 @@ pipeline {
                         git config user.email "$GIT_EMAIL"
 
                         # Idempotent: skip commit/push if manifests already reference this tag.
-                        if git diff --quiet k8s/app.yaml k8s/frontend.yaml; then
+                        if git diff --quiet k8s/backend.yaml k8s/frontend.yaml k8s/app-config.yaml; then
                             echo "k8s manifests already reference $IMAGE_TAG - nothing to commit"
                         else
-                            git add k8s/app.yaml k8s/frontend.yaml
-                            git commit -m "chore(ci): bump backend/frontend image tags to $IMAGE_TAG"
+                            git add k8s/backend.yaml k8s/frontend.yaml k8s/app-config.yaml
+                            git commit -m "chore(ci): bump backend/frontend image tags + APP_VERSION to $IMAGE_TAG"
                             git push "https://x-access-token:${GH_PAT}@${GIT_REPO_URL}" "$MANIFESTS_BRANCH"
                         fi
 
