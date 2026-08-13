@@ -89,7 +89,7 @@ pipeline {
                         script: '''
                             git fetch origin "${MANIFESTS_BRANCH}"
                             cur_tag=$(git show "origin/${MANIFESTS_BRANCH}:k8s/backend.yaml" | grep '^[[:space:]]*image:' | head -1 | sed -E 's/.*://; s/[[:space:]]//g')
-                            if ! echo "$cur_tag" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then cur_tag="0.0.0"; fi
+                            if ! echo "$cur_tag" | grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+$'; then cur_tag="0.0.0"; fi
                             echo "$cur_tag" | awk -F. '{printf "%d.%d.%d\n", $1, $2, $3+1}'
                         ''',
                         returnStdout: true
